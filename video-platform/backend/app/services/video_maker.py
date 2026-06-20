@@ -1,8 +1,9 @@
 """
-视频合成服务 (MoviePy) - 支持中文字幕
+视频合成服务 (MoviePy) - 使用已验证的字幕渲染方案
 """
 
 from pathlib import Path
+from typing import List, Dict
 
 
 def make_video(images_result: list, tts_result: list, keywords_result: list, output_path: str) -> str:
@@ -19,10 +20,7 @@ def make_video(images_result: list, tts_result: list, keywords_result: list, out
         输出视频路径
     """
     try:
-        from moviepy import (
-            ImageClip, AudioFileClip, TextClip, CompositeVideoClip,
-            concatenate_videoclips
-        )
+        from moviepy import ImageClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
         from PIL import Image, ImageDraw, ImageFont
         import numpy as np
     except ImportError:
@@ -31,228 +29,165 @@ def make_video(images_result: list, tts_result: list, keywords_result: list, out
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # 查找中文字体
-    font_path = find_chinese_font()
-    print(f"[INFO] 使用字体: {font_path}")
-
-    # 创建视频片段
-    clips = []
-    created_clips = []  # 跟踪所有创建的clip，用于异常时清理
-
-    # 对齐三个列表长度：以最短的为准，避免IndexError
-    min_len = min(len(images_result), len(tts_result), len(keywords_result))
-    if min_len < max(len(images_result), len(tts_result), len(keywords_result)):
-        print(f"[WARN] 列表长度不一致: images={len(images_result)}, tts={len(tts_result)}, keywords={len(keywords_result)}，截取到 {min_len}")
-
-    try:
-        for i in range(min_len):
-            img_item = images_result[i]
-            tts_item = tts_result[i]
-            img_path = img_item.get("image_path")
-            audio_path = tts_item.get("audio_path")
-            duration = tts_item.get("duration", 3.0)
-            text = keywords_result[i].get("text", "")
-
-            # 安全检查：跳过无效图片路径（包括None）
-            if not img_path or not isinstance(img_path, str) or not Path(img_path).exists():
-                print(f"[WARN] 图片不存在，跳过片段{i}: {img_path}")
-                continue
-
-            # 检查音频文件是否有效
-            has_audio = False
-            if audio_path and Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
-                has_audio = True
-
-            # 创建图片片段
-            img_clip = ImageClip(img_path).with_duration(duration)
-            created_clips.append(img_clip)
-
-            # 调整图片尺寸为1920x1080
-            img_clip = img_clip.resized((1920, 1080))
-
-            # 添加音频
-            if has_audio:
-                try:
-                    audio_clip = AudioFileClip(audio_path)
-                    created_clips.append(audio_clip)
-                    img_clip = img_clip.with_audio(audio_clip)
-                except Exception as e:
-                    print(f"[WARN] 音频加载失败: {e}")
-
-            # 添加字幕（使用Pillow渲染中文）
-            if text and font_path:
-                try:
-                    subtitle_img_path = render_subtitle_image(text, font_path, i)
-                    if subtitle_img_path:
-                        subtitle_clip = ImageClip(subtitle_img_path).with_duration(duration)
-                        created_clips.append(subtitle_clip)
-                        subtitle_clip = subtitle_clip.with_position(('center', 850))
-                        img_clip = CompositeVideoClip([img_clip, subtitle_clip])
-                        created_clips.append(img_clip)
-                except Exception as e:
-                    print(f"[WARN] 字幕渲染失败: {e}")
-
-            clips.append(img_clip)
-            print(f"[INFO] 片段{i}: 图片={Path(img_path).name}, 音频={'有' if has_audio else '无'}, 字幕={'有' if text else '无'}")
-
-        if not clips:
-            raise Exception("没有有效的视频片段")
-
-        # 合并所有片段
-        final_video = concatenate_videoclips(clips, method="compose")
-
-        # 导出视频
-        final_video.write_videofile(
-            str(output),
-            fps=30,
-            codec='libx264',
-            audio_codec='aac',
-            threads=4,
-            preset='medium',
-        )
-
-        final_video.close()
-        print(f"[INFO] 视频合成完成: {output_path}")
-        return str(output)
-
-    finally:
-        # 无论成功失败，都关闭所有已创建的clip，避免文件句柄泄漏
-        for clip in created_clips:
-            try:
-                clip.close()
-            except Exception:
-                pass
-
-
-def find_chinese_font():
-    """查找中文字体（跨平台兼容）"""
-    import os
-
-    # 跨平台字体路径
-    font_paths = [
-        # Windows
-        "C:/Windows/Fonts/msyh.ttc",
-        "C:/Windows/Fonts/simhei.ttf",
-        "C:/Windows/Fonts/simsun.ttc",
-        "C:/Windows/Fonts/msyhbd.ttc",
-        # macOS
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        # Linux
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-    ]
-
-    for path in font_paths:
-        if os.path.exists(path):
-            return path
-
-    print("[WARN] 未找到中文字体，字幕可能无法正常显示")
-    return None
-
-
-def render_subtitle_image(text: str, font_path: str, index: int) -> str:
-    """
-    使用Pillow渲染字幕图片
-
-    Args:
-        text: 字幕文本
-        font_path: 字体路径
-        index: 片段索引
-
-    Returns:
-        字幕图片路径
-    """
-    from PIL import Image, ImageDraw, ImageFont
-    import os
-    import tempfile
-
-    # 分割长文本
-    max_chars = 20
-    lines = []
-    current_line = ""
-
-    for char in text:
-        current_line += char
-        if len(current_line) >= max_chars:
-            lines.append(current_line)
-            current_line = ""
-    if current_line:
-        lines.append(current_line)
-
-    # 最多显示2行
-    lines = lines[:2]
-    subtitle_text = "\n".join(lines)
-
-    # 创建字幕图片
-    width = 1600
-    height = 120
-
-    # 创建透明背景
-    img = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    # 绘制半透明黑色背景
-    draw.rectangle([0, 0, width, height], fill=(0, 0, 0, 180))
+    # 配置
+    VIDEO_WIDTH = 1920
+    VIDEO_HEIGHT = 1080
+    FPS = 30
+    FONT_PATH = r"C:\Windows\Fonts\msyh.ttc"
+    FONT_SIZE = 44
+    SUBTITLE_COLOR = (255, 255, 255)
+    MAX_CHARS_PER_LINE = 18
 
     # 加载字体
     try:
-        font = ImageFont.truetype(font_path, 40)
-    except:
+        font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+        print(f"[INFO] 使用字体: {FONT_PATH}")
+    except Exception as e:
+        print(f"[WARN] 加载字体失败: {e}")
         font = ImageFont.load_default()
 
-    # 计算文本位置
-    bbox = draw.textbbox((0, 0), subtitle_text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
+    # 创建视频片段
+    clips = []
 
-    x = (width - text_width) // 2
-    y = (height - text_height) // 2
+    # 对齐三个列表长度
+    min_len = min(len(images_result), len(tts_result), len(keywords_result))
+    print(f"[INFO] 开始合成视频: {min_len} 个片段")
 
-    # 绘制白色文字
-    draw.text((x, y), subtitle_text, fill=(255, 255, 255, 255), font=font)
+    for i in range(min_len):
+        img_item = images_result[i]
+        tts_item = tts_result[i]
+        img_path = img_item.get("image_path")
+        audio_path = tts_item.get("audio_path")
+        duration = tts_item.get("duration", 3.0)
+        text = keywords_result[i].get("text", "")
 
-    # 保存图片
-    output_path = os.path.join(tempfile.gettempdir(), f"subtitle_{index}.png")
-    img.save(output_path, 'PNG')
+        if not img_path or not Path(img_path).exists():
+            print(f"[WARN] 图片不存在，跳过片段{i}: {img_path}")
+            continue
 
-    return output_path
+        # 检查音频文件是否有效
+        has_audio = False
+        if audio_path and Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
+            has_audio = True
+
+        # 创建图片片段
+        img_clip = ImageClip(img_path).with_duration(duration)
+        img_clip = img_clip.resized((VIDEO_WIDTH, VIDEO_HEIGHT))
+
+        # 添加音频
+        if has_audio:
+            try:
+                audio_clip = AudioFileClip(audio_path)
+                img_clip = img_clip.with_audio(audio_clip)
+            except Exception as e:
+                print(f"[WARN] 音频加载失败: {e}")
+
+        # 添加字幕（使用已验证的方案）
+        if text:
+            try:
+                subtitle_img = create_subtitle_image(text, VIDEO_WIDTH, font, MAX_CHARS_PER_LINE, FONT_SIZE, SUBTITLE_COLOR)
+                subtitle_clip = ImageClip(subtitle_img, is_mask=False, transparent=True)
+                subtitle_clip = subtitle_clip.with_duration(duration)
+                subtitle_clip = subtitle_clip.with_position(('center', 880))
+                img_clip = CompositeVideoClip([img_clip, subtitle_clip])
+            except Exception as e:
+                print(f"[WARN] 字幕渲染失败: {e}")
+
+        clips.append(img_clip)
+        print(f"[INFO] 片段{i}: 图片={Path(img_path).name}, 音频={'有' if has_audio else '无'}, 字幕={'有' if text else '无'}")
+
+    if not clips:
+        raise Exception("没有有效的视频片段")
+
+    # 合并所有片段
+    final_video = concatenate_videoclips(clips, method="compose")
+
+    # 导出视频
+    final_video.write_videofile(
+        str(output),
+        fps=FPS,
+        codec='libx264',
+        audio_codec='aac',
+        threads=4,
+        preset='medium',
+    )
+
+    # 清理
+    final_video.close()
+    for clip in clips:
+        clip.close()
+
+    print(f"[INFO] 视频合成完成: {output_path}")
+    return str(output)
 
 
-def split_subtitle(text: str, max_chars: int = 20) -> str:
-    """
-    分割字幕文本
-
-    Args:
-        text: 原始文本
-        max_chars: 每行最大字符数
-
-    Returns:
-        分割后的文本
-    """
+def wrap_text(text: str, max_chars: int) -> List[str]:
+    """文本换行"""
     if len(text) <= max_chars:
-        return text
-
-    # 按标点符号分割
-    import re
-    parts = re.split(r'[，。！？、；]', text)
-    parts = [p.strip() for p in parts if p.strip()]
+        return [text]
 
     lines = []
-    current_line = ""
+    current = ""
+    for char in text:
+        current += char
+        if len(current) >= max_chars:
+            lines.append(current)
+            current = ""
+    if current:
+        lines.append(current)
+    return lines
 
-    for part in parts:
-        if len(current_line) + len(part) <= max_chars:
-            current_line += part
-        else:
-            if current_line:
-                lines.append(current_line)
-            current_line = part
 
-    if current_line:
-        lines.append(current_line)
+def create_subtitle_image(text: str, video_width: int, font, max_chars: int, font_size: int, subtitle_color: tuple):
+    """
+    创建字幕图片（使用已验证的方案）
 
-    return '\n'.join(lines[:2])  # 最多2行
+    Args:
+        text: 字幕文本
+        video_width: 视频宽度
+        font: 字体
+        max_chars: 每行最大字符数
+        font_size: 字体大小
+        subtitle_color: 字幕颜色
+
+    Returns:
+        字幕图片数组
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    import numpy as np
+
+    lines = wrap_text(text, max_chars)
+
+    padding = 15
+    line_height = font_size + 8
+    total_height = line_height * len(lines) + padding * 2
+
+    temp_img = Image.new("RGBA", (1, 1))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    max_width = 0
+    for line in lines:
+        bbox = temp_draw.textbbox((0, 0), line, font=font)
+        max_width = max(max_width, bbox[2] - bbox[0])
+
+    img_width = min(max_width + padding * 2, video_width - 100)
+    img_height = total_height
+
+    img = Image.new("RGBA", (img_width, img_height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # 半透明黑色背景，圆角矩形
+    draw.rounded_rectangle([0, 0, img_width - 1, img_height - 1], radius=10, fill=(0, 0, 0, 180))
+
+    for i, line in enumerate(lines):
+        bbox = temp_draw.textbbox((0, 0), line, font=font)
+        line_width = bbox[2] - bbox[0]
+        x = (img_width - line_width) // 2
+        y = padding + i * line_height
+
+        # 阴影
+        draw.text((x + 2, y + 2), line, font=font, fill=(0, 0, 0, 200))
+        # 正文
+        draw.text((x, y), line, font=font, fill=subtitle_color)
+
+    return np.array(img)
