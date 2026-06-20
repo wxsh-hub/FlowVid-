@@ -1,0 +1,35 @@
+# Web框架
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# 数据库
+sqlalchemy==2.0.23
+alembic==1.13.0
+
+# 视频处理
+moviepy==2.0.0.dev2
+Pillow==10.1.0
+
+# 语音识别
+faster-whisper==0.10.0
+
+# TTS
+edge-tts==6.1.9
+
+# AI API
+openai==1.6.1
+
+# 网络请求
+requests==2.31.0
+aiohttp==3.9.1
+
+# 视频下载
+yt-dlp==2024.1.2
+
+# 音频处理
+mutagen==1.47.0
+
+# 工具
+python-dotenv==1.0.0
+pydantic==2.5.3
