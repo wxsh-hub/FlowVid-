@@ -20,6 +20,29 @@ router = APIRouter()
 class CreateTaskRequest(BaseModel):
     video_url: str
     config_id: Optional[str] = None
+    duration: Optional[int] = 0  # 截取时长（秒），0表示全部
+
+    @staticmethod
+    def _is_valid_url(url: str) -> bool:
+        """校验URL是否为合法的视频链接"""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        if not parsed.netloc:
+            return False
+        # 禁止内网地址
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(parsed.hostname)
+            if ip.is_private or ip.is_loopback or ip.is_reserved:
+                return False
+        except ValueError:
+            # hostname 是域名，检查常见内网域名
+            hostname = (parsed.hostname or "").lower()
+            if hostname in ("localhost", "127.0.0.1", "0.0.0.0"):
+                return False
+        return True
 
 
 @router.post("")
@@ -29,6 +52,10 @@ async def create_task(
     db: Session = Depends(get_db)
 ):
     """创建视频生成任务"""
+    # 校验URL
+    if not CreateTaskRequest._is_valid_url(request.video_url):
+        raise HTTPException(status_code=400, detail="无效的视频链接，请提供合法的http/https链接")
+
     task_id = str(uuid.uuid4())
 
     # 获取配置
@@ -54,6 +81,7 @@ async def create_task(
     task = Task(
         id=task_id,
         video_url=request.video_url,
+        duration=request.duration,
         status="pending",
         progress=0,
         current_step="等待开始",
@@ -64,7 +92,7 @@ async def create_task(
     db.commit()
 
     # 启动后台任务
-    background_tasks.add_task(process_video_task, task_id, request.video_url, api_keys)
+    background_tasks.add_task(process_video_task, task_id, request.video_url, api_keys, request.duration)
 
     return {"task_id": task_id, "status": "pending", "message": "任务已创建，开始处理"}
 
@@ -89,8 +117,9 @@ async def list_tasks(
     query = db.query(Task)
     if status:
         query = query.filter(Task.status == status)
-    tasks = query.order_by(Task.created_at.desc()).offset(offset).limit(limit).all()
+    # 先计算总数，再取分页数据，避免重复查询
     total = query.count()
+    tasks = query.order_by(Task.created_at.desc()).offset(offset).limit(limit).all()
     return {
         "tasks": [t.to_dict() for t in tasks],
         "total": total,

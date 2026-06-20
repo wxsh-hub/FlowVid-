@@ -89,7 +89,7 @@ def get_audio_duration(audio_path: str) -> float:
         from mutagen.mp3 import MP3
         audio = MP3(audio_path)
         return audio.info.length
-    except:
-        # 备用方案：估算
+    except (ImportError, Exception) as e:
+        print(f"[WARN] 获取音频时长失败，使用估算: {e}")
         file_size = Path(audio_path).stat().st_size
         return file_size / 16000  # 假设128kbps

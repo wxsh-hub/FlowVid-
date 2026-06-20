@@ -5,6 +5,23 @@
 import json
 from pathlib import Path
 
+# 模型缓存，避免每次任务都重新加载（数GB模型）
+_whisper_model = None
+
+
+def _get_whisper_model():
+    """获取Whisper模型单例"""
+    global _whisper_model
+    if _whisper_model is None:
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            raise Exception("faster-whisper未安装，请运行: pip install faster-whisper")
+        print("[INFO] 首次加载Whisper large-v3模型...")
+        _whisper_model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+        print("[INFO] Whisper模型加载完成")
+    return _whisper_model
+
 
 def transcribe_video(video_path: str, output_path: str) -> list:
     """
@@ -17,17 +34,11 @@ def transcribe_video(video_path: str, output_path: str) -> list:
     Returns:
         转写结果列表 [{"start": 0.0, "end": 1.0, "text": "..."}]
     """
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        raise Exception("faster-whisper未安装，请运行: pip install faster-whisper")
-
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    # 加载模型
-    print("[INFO] 加载Whisper large-v3模型...")
-    model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+    # 使用缓存的模型
+    model = _get_whisper_model()
 
     # 转写
     print(f"[INFO] 开始转写: {video_path}")

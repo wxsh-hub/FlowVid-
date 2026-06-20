@@ -12,10 +12,11 @@ class Task(Base):
 
     id = Column(String(36), primary_key=True, index=True)
     video_url = Column(Text, nullable=False)
+    duration = Column(Integer, default=0)  # 截取时长（秒），0表示全部
     status = Column(String(20), default="pending")  # pending/processing/completed/failed
     progress = Column(Integer, default=0)
     current_step = Column(String(100), default="")
-    steps = Column(JSON, default=[])
+    steps = Column(JSON, default=list)
     config_id = Column(String(36), nullable=True)
     output_path = Column(Text, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -27,6 +28,7 @@ class Task(Base):
         return {
             "id": self.id,
             "video_url": self.video_url,
+            "duration": self.duration,
             "status": self.status,
             "progress": self.progress,
             "current_step": self.current_step,

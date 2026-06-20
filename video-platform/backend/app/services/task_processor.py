@@ -27,11 +27,11 @@ def update_task_status(task_id: str, step_index: int, step_status: str, progress
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
             return
-        steps = task.steps
+        # 创建新列表，避免原地修改（不可变模式）
+        steps = [dict(s) for s in (task.steps or [])]
         if step_index < len(steps):
-            steps[step_index]["status"] = step_status
-            steps[step_index]["progress"] = progress
-        total_progress = sum(s["progress"] for s in steps) // len(steps)
+            steps[step_index] = {**steps[step_index], "status": step_status, "progress": progress}
+        total_progress = sum(s["progress"] for s in steps) // len(steps) if steps else 0
         task.steps = steps
         task.progress = total_progress
         if current_step:
@@ -67,9 +67,11 @@ def mark_task_completed(task_id: str, output_path: str):
             task.output_path = output_path
             task.completed_at = datetime.utcnow()
             task.updated_at = datetime.utcnow()
-            for step in task.steps:
-                step["status"] = "completed"
-                step["progress"] = 100
+            # 创建新列表，避免原地修改
+            task.steps = [
+                {**s, "status": "completed", "progress": 100}
+                for s in (task.steps or [])
+            ]
             db.commit()
     finally:
         db.close()
@@ -91,8 +93,15 @@ def get_config_dict(config: UserConfig) -> dict:
     }
 
 
-def process_video_task(task_id: str, video_url: str, api_keys: dict):
-    """处理视频生成任务"""
+def process_video_task(task_id: str, video_url: str, api_keys: dict, duration: int = 0):
+    """处理视频生成任务
+
+    Args:
+        task_id: 任务ID
+        video_url: 视频链接
+        api_keys: API配置
+        duration: 截取时长（秒），0表示全部
+    """
     db = SessionLocal()
     try:
         task = db.query(Task).filter(Task.id == task_id).first()
@@ -109,7 +118,7 @@ def process_video_task(task_id: str, video_url: str, api_keys: dict):
     try:
         # 步骤1: 下载视频
         update_task_status(task_id, 0, "processing", 0, "下载视频中...")
-        video_path = download_video(video_url, str(task_dir / "source.mp4"))
+        video_path = download_video(video_url, str(task_dir / "source.mp4"), duration)
         update_task_status(task_id, 0, "completed", 100, "下载完成")
 
         # 步骤2: 语音转文字
@@ -163,6 +172,5 @@ def process_video_task(task_id: str, video_url: str, api_keys: dict):
         mark_task_completed(task_id, output_path)
 
     except Exception as e:
-        error_msg = f"处理失败: {str(e)}"
-        print(f"[ERROR] {error_msg}")
-        mark_task_failed(task_id, error_msg)
+        print(f"[ERROR] 任务 {task_id} 处理失败: {e}")
+        mark_task_failed(task_id, "处理失败，请查看服务器日志了解详情")

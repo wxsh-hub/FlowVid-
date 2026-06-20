@@ -14,8 +14,28 @@
             v-model="form.video_url"
             placeholder="请输入视频链接（支持抖音、B站等）"
             clearable
+            @blur="validateUrl"
           />
           <div class="form-tip">支持抖音、B站、YouTube等主流视频平台</div>
+          <el-alert
+            v-if="urlWarning"
+            :title="urlWarning"
+            type="warning"
+            show-icon
+            :closable="false"
+            style="margin-top: 10px;"
+          />
+        </el-form-item>
+
+        <el-form-item label="截取时长">
+          <el-select v-model="form.duration" placeholder="选择截取时长">
+            <el-option label="全部" :value="0" />
+            <el-option label="1分钟" :value="60" />
+            <el-option label="3分钟" :value="180" />
+            <el-option label="5分钟" :value="300" />
+            <el-option label="10分钟" :value="600" />
+          </el-select>
+          <div class="form-tip">选择"全部"则使用完整视频</div>
         </el-form-item>
 
         <el-divider>AI模型配置</el-divider>
@@ -78,11 +98,34 @@ const router = useRouter()
 const formRef = ref()
 const submitting = ref(false)
 const configs = ref<any[]>([])
+const urlWarning = ref('')
 
 const form = ref({
   video_url: '',
   config_id: '',
+  duration: 0,  // 默认全部
 })
+
+const validateUrl = () => {
+  const url = form.value.video_url
+  urlWarning.value = ''
+
+  if (!url) return
+
+  // 检测搜索链接
+  const searchPatterns = [
+    /\/search\//,
+    /\/jingxuan\/search/,
+    /type=general/,
+  ]
+
+  for (const pattern of searchPatterns) {
+    if (pattern.test(url)) {
+      urlWarning.value = '这是一个搜索链接，请提供视频详情页链接（如：https://www.douyin.com/video/xxx）'
+      return
+    }
+  }
+}
 
 const rules = {
   video_url: [

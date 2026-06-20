@@ -34,11 +34,18 @@ def make_video(images_result: list, tts_result: list, keywords_result: list, out
     # 创建视频片段
     clips = []
 
-    for i, (img_item, tts_item) in enumerate(zip(images_result, tts_result)):
+    # 对齐三个列表长度：以最短的为准，避免IndexError
+    min_len = min(len(images_result), len(tts_result), len(keywords_result))
+    if min_len < max(len(images_result), len(tts_result), len(keywords_result)):
+        print(f"[WARN] 列表长度不一致: images={len(images_result)}, tts={len(tts_result)}, keywords={len(keywords_result)}，截取到 {min_len}")
+
+    for i in range(min_len):
+        img_item = images_result[i]
+        tts_item = tts_result[i]
         img_path = img_item.get("image_path")
         audio_path = tts_item.get("audio_path")
         duration = tts_item.get("duration", 3.0)
-        text = keywords_result[i].get("text", "") if i < len(keywords_result) else ""
+        text = keywords_result[i].get("text", "")
 
         if not img_path or not Path(img_path).exists():
             continue
