@@ -23,13 +23,9 @@ yarn-error.log*
 *.swp
 *.swo
 
-# Storage
-storage/uploads/*
-storage/transcribes/*
-storage/images/*
-storage/audio/*
-storage/outputs/*
-!storage/*/.gitkeep
+# Storage (任务产生的临时文件)
+**/storage/**/
+!**/storage/**/.gitkeep
 
 # Database
 *.db
@@ -40,10 +36,6 @@ data/
 .env
 .env.local
 .env.*.local
-
-# API Keys (敏感信息)
-**/api_keys.json
-**/secrets.json
 
 # Logs
 *.log

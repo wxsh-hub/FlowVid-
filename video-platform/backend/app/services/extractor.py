@@ -1,5 +1,5 @@
 """
-关键词提取服务 (MiMo AI)
+关键词提取服务 - 支持多种AI协议
 """
 
 import json
@@ -7,21 +7,22 @@ from pathlib import Path
 from openai import OpenAI
 
 
-def extract_keywords(transcribe_result: list, api_key: str, base_url: str, output_path: str) -> list:
+def extract_keywords(transcribe_result: list, api_key: str, base_url: str, model: str, output_path: str) -> list:
     """
-    使用MiMo AI提取关键词和生成提示词
+    使用AI提取关键词和生成提示词
 
     Args:
         transcribe_result: Whisper转写结果
-        api_key: MiMo API密钥
-        base_url: MiMo API基础URL
+        api_key: API密钥
+        base_url: API基础URL
+        model: 模型名称
         output_path: 输出JSON路径
 
     Returns:
         提取结果列表 [{"text": "...", "search_keyword": "...", "ai_prompt": "..."}]
     """
     if not api_key:
-        raise Exception("MiMo API密钥未配置")
+        raise Exception("API密钥未配置")
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +49,7 @@ def extract_keywords(transcribe_result: list, api_key: str, base_url: str, outpu
 
         try:
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=model or "gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )

@@ -3,20 +3,31 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <span>API配置管理</span>
+          <span>配置方案管理</span>
           <div>
-            <el-button type="primary" @click="showDialog()">新建配置</el-button>
+            <el-button type="primary" @click="showDialog()">新建配置方案</el-button>
             <el-button @click="goBack">返回</el-button>
           </div>
         </div>
       </template>
 
-      <el-table :data="configs" style="width: 100%" v-loading="loading">
-        <el-table-column prop="name" label="配置名称" width="150" />
-        <el-table-column prop="mimo_api_key" label="MiMo API Key" width="200" />
-        <el-table-column prop="pexels_api_key" label="Pexels API Key" width="200" />
-        <el-table-column prop="seedream_api_key" label="豆包API Key" width="200" />
-        <el-table-column prop="tts_voice" label="TTS语音" width="150">
+      <el-empty v-if="!loading && configs.length === 0" description="暂无配置方案，请先创建" />
+
+      <el-table v-else :data="configs" style="width: 100%" v-loading="loading">
+        <el-table-column prop="name" label="方案名称" width="150" />
+        <el-table-column label="文本模型" width="200">
+          <template #default="{ row }">
+            <div>{{ row.text_model }}</div>
+            <div class="model-url">{{ row.text_base_url }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="图片模型" width="200">
+          <template #default="{ row }">
+            <div>{{ row.image_model }}</div>
+            <div class="model-url">{{ row.image_base_url }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="tts_voice" label="TTS语音" width="120">
           <template #default="{ row }">
             {{ getVoiceName(row.tts_voice) }}
           </template>
@@ -35,24 +46,57 @@
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="editingConfig ? '编辑配置' : '新建配置'" width="500px">
+    <el-dialog v-model="dialogVisible" :title="editingConfig ? '编辑配置方案' : '新建配置方案'" width="700px">
       <el-form :model="form" label-width="120px">
-        <el-form-item label="配置名称">
-          <el-input v-model="form.name" placeholder="请输入配置名称" />
+        <el-form-item label="方案名称" required>
+          <el-input v-model="form.name" placeholder="请输入方案名称，如：阿里百炼方案" />
         </el-form-item>
-        <el-form-item label="MiMo API Key">
-          <el-input v-model="form.mimo_api_key" placeholder="请输入MiMo API Key" show-password />
+
+        <el-divider>文本模型配置（关键词提取）</el-divider>
+
+        <el-form-item label="协议类型">
+          <el-select v-model="form.text_protocol" placeholder="选择协议" @change="handleTextProtocolChange">
+            <el-option label="OpenAI兼容" value="openai" />
+            <el-option label="阿里百炼" value="dashscope" />
+            <el-option label="DeepSeek" value="deepseek" />
+            <el-option label="Anthropic" value="anthropic" />
+            <el-option label="自定义" value="custom" />
+          </el-select>
         </el-form-item>
-        <el-form-item label="MiMo Base URL">
-          <el-input v-model="form.mimo_base_url" placeholder="API基础URL" />
+        <el-form-item label="Base URL" required>
+          <el-input v-model="form.text_base_url" placeholder="如：https://api.openai.com/v1" />
         </el-form-item>
-        <el-form-item label="Pexels API Key">
-          <el-input v-model="form.pexels_api_key" placeholder="请输入Pexels API Key" show-password />
+        <el-form-item label="模型名称" required>
+          <el-input v-model="form.text_model" placeholder="如：qwen-turbo, deepseek-chat" />
         </el-form-item>
-        <el-form-item label="豆包API Key">
-          <el-input v-model="form.seedream_api_key" placeholder="格式: ark-xxx" show-password />
-          <div class="form-tip">用于AI生图，格式为 ark-xxx</div>
+        <el-form-item label="API Key" required>
+          <el-input v-model="form.text_api_key" placeholder="请输入API Key" show-password />
+          <div class="form-tip" v-if="editingConfig">留空表示不修改</div>
         </el-form-item>
+
+        <el-divider>图片模型配置（AI生图）</el-divider>
+
+        <el-form-item label="协议类型">
+          <el-select v-model="form.image_protocol" placeholder="选择协议" @change="handleImageProtocolChange">
+            <el-option label="豆包Seedream" value="doubao" />
+            <el-option label="阿里百炼" value="dashscope" />
+            <el-option label="OpenAI DALL-E" value="openai" />
+            <el-option label="自定义" value="custom" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="Base URL" required>
+          <el-input v-model="form.image_base_url" placeholder="API调用地址" />
+        </el-form-item>
+        <el-form-item label="模型名称" required>
+          <el-input v-model="form.image_model" placeholder="模型名称" />
+        </el-form-item>
+        <el-form-item label="API Key" required>
+          <el-input v-model="form.image_api_key" placeholder="请输入API Key" show-password />
+          <div class="form-tip" v-if="editingConfig">留空表示不修改</div>
+        </el-form-item>
+
+        <el-divider>TTS语音配置</el-divider>
+
         <el-form-item label="TTS语音">
           <el-select v-model="form.tts_voice" placeholder="选择语音">
             <el-option label="云希（男声）" value="zh-CN-YunxiNeural" />
@@ -65,9 +109,10 @@
           <el-input v-model="form.tts_rate" placeholder="如: +0%, +10%, -10%" />
         </el-form-item>
       </el-form>
+
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit" :loading="submitting">确定</el-button>
+        <el-button type="primary" @click="handleSubmit" :loading="submitting">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -86,15 +131,73 @@ const dialogVisible = ref(false)
 const submitting = ref(false)
 const editingConfig = ref<any>(null)
 
-const form = ref({
-  name: '默认配置',
-  mimo_api_key: '',
-  mimo_base_url: 'https://api.mimoai.com/v1',
-  pexels_api_key: '',
-  seedream_api_key: '',
+const defaultForm = {
+  name: '',
+  text_base_url: 'https://api.openai.com/v1',
+  text_model: 'gpt-4o',
+  text_api_key: '',
+  text_protocol: 'openai',
+  image_base_url: 'https://ark.cn-beijing.volces.com/api/v3/images/generations',
+  image_model: 'doubao-seedream-4-5-251128',
+  image_api_key: '',
+  image_protocol: 'doubao',
   tts_voice: 'zh-CN-YunxiNeural',
   tts_rate: '+0%',
-})
+}
+
+const form = ref({ ...defaultForm })
+
+// 文本协议预设
+const textProtocolPresets: Record<string, any> = {
+  openai: {
+    text_base_url: 'https://api.openai.com/v1',
+    text_model: 'gpt-4o',
+  },
+  dashscope: {
+    text_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    text_model: 'qwen-turbo',
+  },
+  deepseek: {
+    text_base_url: 'https://api.deepseek.com',
+    text_model: 'deepseek-chat',
+  },
+  anthropic: {
+    text_base_url: 'https://api.anthropic.com',
+    text_model: 'claude-3-5-sonnet-20241022',
+  },
+}
+
+// 图片协议预设
+const imageProtocolPresets: Record<string, any> = {
+  doubao: {
+    image_base_url: 'https://ark.cn-beijing.volces.com/api/v3/images/generations',
+    image_model: 'doubao-seedream-4-5-251128',
+  },
+  dashscope: {
+    image_base_url: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis',
+    image_model: 'wanx-v1',
+  },
+  openai: {
+    image_base_url: 'https://api.openai.com/v1',
+    image_model: 'dall-e-3',
+  },
+}
+
+const handleTextProtocolChange = (protocol: string) => {
+  const preset = textProtocolPresets[protocol]
+  if (preset) {
+    form.value.text_base_url = preset.text_base_url
+    form.value.text_model = preset.text_model
+  }
+}
+
+const handleImageProtocolChange = (protocol: string) => {
+  const preset = imageProtocolPresets[protocol]
+  if (preset) {
+    form.value.image_base_url = preset.image_base_url
+    form.value.image_model = preset.image_model
+  }
+}
 
 const fetchConfigs = async () => {
   loading.value = true
@@ -108,38 +211,46 @@ const fetchConfigs = async () => {
   }
 }
 
-const showDialog = (config?: any) => {
+const showDialog = async (config?: any) => {
   if (config) {
     editingConfig.value = config
-    form.value = {
-      name: config.name,
-      mimo_api_key: '',
-      mimo_base_url: config.mimo_base_url || 'https://api.mimoai.com/v1',
-      pexels_api_key: '',
-      seedream_api_key: '',
-      tts_voice: config.tts_voice || 'zh-CN-YunxiNeural',
-      tts_rate: config.tts_rate || '+0%',
+    try {
+      const res = await axios.get('/api/configs/' + config.id)
+      const fullConfig = res.data
+      form.value = {
+        name: fullConfig.name,
+        text_base_url: fullConfig.text_base_url || 'https://api.openai.com/v1',
+        text_model: fullConfig.text_model || 'gpt-4o',
+        text_api_key: fullConfig.text_api_key ? '**********' : '',
+        text_protocol: fullConfig.text_protocol || 'openai',
+        image_base_url: fullConfig.image_base_url || 'https://ark.cn-beijing.volces.com/api/v3/images/generations',
+        image_model: fullConfig.image_model || 'doubao-seedream-4-5-251128',
+        image_api_key: fullConfig.image_api_key ? '**********' : '',
+        image_protocol: fullConfig.image_protocol || 'doubao',
+        tts_voice: fullConfig.tts_voice || 'zh-CN-YunxiNeural',
+        tts_rate: fullConfig.tts_rate || '+0%',
+      }
+    } catch (error) {
+      ElMessage.error('获取配置详情失败')
+      return
     }
   } else {
     editingConfig.value = null
-    form.value = {
-      name: '默认配置',
-      mimo_api_key: '',
-      mimo_base_url: 'https://api.mimoai.com/v1',
-      pexels_api_key: '',
-      seedream_api_key: '',
-      tts_voice: 'zh-CN-YunxiNeural',
-      tts_rate: '+0%',
-    }
+    form.value = { ...defaultForm }
   }
   dialogVisible.value = true
 }
 
 const handleSubmit = async () => {
+  if (!form.value.name) {
+    ElMessage.warning('请输入方案名称')
+    return
+  }
+
   submitting.value = true
   try {
     if (editingConfig.value) {
-      await axios.put(`/api/configs/${editingConfig.value.id}`, form.value)
+      await axios.put('/api/configs/' + editingConfig.value.id, form.value)
       ElMessage.success('更新成功')
     } else {
       await axios.post('/api/configs', form.value)
@@ -156,8 +267,8 @@ const handleSubmit = async () => {
 
 const handleDelete = async (id: string) => {
   try {
-    await ElMessageBox.confirm('确定删除该配置吗？', '提示', { type: 'warning' })
-    await axios.delete(`/api/configs/${id}`)
+    await ElMessageBox.confirm('确定删除该配置方案吗？', '提示', { type: 'warning' })
+    await axios.delete('/api/configs/' + id)
     ElMessage.success('删除成功')
     fetchConfigs()
   } catch (error) {
@@ -201,9 +312,20 @@ onMounted(fetchConfigs)
   align-items: center;
 }
 
+.model-url {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+
 .form-tip {
   font-size: 12px;
   color: #909399;
   margin-top: 5px;
+}
+
+:deep(.el-divider__text) {
+  font-weight: 600;
+  color: #303133;
 }
 </style>

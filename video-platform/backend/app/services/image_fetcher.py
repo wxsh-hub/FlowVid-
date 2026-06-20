@@ -1,21 +1,24 @@
 """
-图片获取服务 (Pexels搜图 + Seedream生图)
+图片获取服务 - 支持多种AI生图协议，使用线程池并行处理
 """
 
 import os
 import json
+import time
 from pathlib import Path
-from openai import OpenAI
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def fetch_images(keywords_result: list, pexels_key: str, seedream_key: str, output_dir: str) -> list:
+def fetch_images(keywords_result: list, api_key: str, base_url: str, model: str, protocol: str, output_dir: str) -> list:
     """
-    获取图片（搜图 + 生图）
+    获取图片（搜图 + 生图）- 使用线程池并行处理
 
     Args:
         keywords_result: 关键词提取结果
-        pexels_key: Pexels API密钥
-        seedream_key: Seedream API密钥
+        api_key: API密钥
+        base_url: API基础URL
+        model: 模型名称
+        protocol: 协议类型 (doubao / dashscope / openai / custom)
         output_dir: 输出目录
 
     Returns:
@@ -24,34 +27,102 @@ def fetch_images(keywords_result: list, pexels_key: str, seedream_key: str, outp
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    result = []
-
+    # 准备任务列表
+    tasks = []
     for i, item in enumerate(keywords_result):
         keyword = item.get("search_keyword", "")
         ai_prompt = item.get("ai_prompt", "")
-
-        image_path = None
-
-        # 尝试Pexels搜图
-        if pexels_key and keyword:
-            image_path = search_pexels(keyword, pexels_key, str(output / f"{i:03d}_{keyword}.jpg"))
-
-        # 如果搜图失败，使用AI生图
-        if not image_path and seedream_key and ai_prompt:
-            image_path = generate_image_seedream(ai_prompt, seedream_key, str(output / f"{i:03d}_{keyword}.jpg"))
-
-        # 如果还是失败，使用占位图
-        if not image_path:
-            image_path = create_placeholder(keyword, str(output / f"{i:03d}_{keyword}.jpg"))
-
-        result.append({
+        output_path = str(output / f"{i:03d}_{keyword}.jpg")
+        tasks.append({
             "index": i,
-            "image_path": image_path,
             "keyword": keyword,
+            "ai_prompt": ai_prompt,
+            "output_path": output_path,
         })
+
+    print(f"[INFO] 开始并行获取 {len(tasks)} 张图片...")
+
+    # 使用线程池并行处理
+    result = [None] * len(tasks)
+    max_workers = min(4, len(tasks))  # 最多4个线程
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        future_to_task = {}
+        for task in tasks:
+            future = executor.submit(
+                _fetch_single_image,
+                task["keyword"],
+                task["ai_prompt"],
+                task["output_path"],
+                api_key,
+                base_url,
+                model,
+                protocol,
+            )
+            future_to_task[future] = task
+
+        # 收集结果
+        for future in as_completed(future_to_task):
+            task = future_to_task[future]
+            try:
+                image_path = future.result()
+                result[task["index"]] = {
+                    "index": task["index"],
+                    "image_path": image_path,
+                    "keyword": task["keyword"],
+                }
+                print(f"[INFO] 图片 {task['index']+1}/{len(tasks)} 完成: {task['keyword']}")
+            except Exception as e:
+                print(f"[WARN] 图片 {task['index']+1} 获取失败: {e}")
+                result[task["index"]] = {
+                    "index": task["index"],
+                    "image_path": create_placeholder(task["keyword"], task["output_path"]),
+                    "keyword": task["keyword"],
+                }
+
+    # 确保所有结果都已填充
+    for i in range(len(result)):
+        if result[i] is None:
+            result[i] = {
+                "index": i,
+                "image_path": create_placeholder(tasks[i]["keyword"], tasks[i]["output_path"]),
+                "keyword": tasks[i]["keyword"],
+            }
 
     print(f"[INFO] 图片获取完成: {len(result)} 张")
     return result
+
+
+def _fetch_single_image(keyword: str, ai_prompt: str, output_path: str,
+                         api_key: str, base_url: str, model: str, protocol: str) -> str:
+    """
+    获取单张图片（搜图 + 生图）
+
+    Args:
+        keyword: 搜索关键词
+        ai_prompt: AI生图提示词
+        output_path: 输出路径
+        api_key: API密钥
+        base_url: API基础URL
+        model: 模型名称
+        protocol: 协议类型
+
+    Returns:
+        图片路径或None
+    """
+    image_path = None
+
+    # 尝试Pexels搜图（使用默认API）
+    pexels_key = os.environ.get("PEXELS_API_KEY", "")
+    if keyword:
+        image_path = search_pexels(keyword, pexels_key, output_path)
+
+    # 如果搜图失败，使用AI生图
+    if not image_path and api_key and ai_prompt:
+        image_path = generate_image(ai_prompt, api_key, base_url, model, protocol, output_path)
+
+    return image_path
 
 
 def search_pexels(keyword: str, api_key: str, output_path: str) -> str:
@@ -67,6 +138,9 @@ def search_pexels(keyword: str, api_key: str, output_path: str) -> str:
         图片路径或None
     """
     import requests
+
+    if not api_key:
+        return None
 
     headers = {"Authorization": api_key}
     params = {"query": keyword, "per_page": 1, "orientation": "landscape"}
@@ -91,10 +165,8 @@ def search_pexels(keyword: str, api_key: str, output_path: str) -> str:
                 if img_response.status_code == 200:
                     with open(output_path, 'wb') as f:
                         f.write(img_response.content)
-                    print(f"[INFO] Pexels搜图成功: {keyword}")
                     return output_path
 
-        print(f"[WARN] Pexels搜图失败: {keyword}")
         return None
 
     except Exception as e:
@@ -102,64 +174,200 @@ def search_pexels(keyword: str, api_key: str, output_path: str) -> str:
         return None
 
 
-def generate_image_seedream(prompt: str, api_key: str, output_path: str) -> str:
+def generate_image(prompt: str, api_key: str, base_url: str, model: str, protocol: str, output_path: str) -> str:
     """
-    使用豆包Seedream生成图片
+    使用AI生成图片（支持多种协议）
 
     Args:
         prompt: 生图提示词
-        api_key: API密钥 (格式: ark-xxx)
+        api_key: API密钥
+        base_url: API基础URL
+        model: 模型名称
+        protocol: 协议类型
         output_path: 输出路径
 
     Returns:
         图片路径或None
     """
+    try:
+        if protocol == "doubao":
+            return generate_image_doubao(prompt, api_key, base_url, model, output_path)
+        elif protocol == "dashscope":
+            return generate_image_dashscope(prompt, api_key, base_url, model, output_path)
+        elif protocol == "openai":
+            return generate_image_openai(prompt, api_key, base_url, model, output_path)
+        else:
+            return generate_image_custom(prompt, api_key, base_url, model, output_path)
+    except Exception as e:
+        print(f"[WARN] AI生图失败: {e}")
+        return None
+
+
+def generate_image_doubao(prompt: str, api_key: str, base_url: str, model: str, output_path: str) -> str:
+    """豆包协议生图"""
     import requests
 
-    url = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
-
+    url = base_url or "https://ark.cn-beijing.volces.com/api/v3/images/generations"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
-
     payload = {
-        "model": "doubao-seedream-4-5-251128",
+        "model": model or "doubao-seedream-4-5-251128",
         "prompt": prompt,
         "sequential_image_generation": "disabled",
         "response_format": "url",
-        "size": "2K",  # 最小尺寸要求
+        "size": "2K",
         "stream": False,
         "watermark": False
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+    response = requests.post(url, headers=headers, json=payload, timeout=120)
 
-        if response.status_code == 200:
-            data = response.json()
-            images = data.get("data", [])
+    if response.status_code == 200:
+        data = response.json()
+        images = data.get("data", [])
+        if images:
+            img_url = images[0].get("url")
+            if img_url:
+                return download_image(img_url, output_path)
 
-            if images:
-                img_url = images[0].get("url")
-                if img_url:
-                    # 下载图片
-                    img_response = requests.get(img_url, timeout=60)
-                    if img_response.status_code == 200:
-                        with open(output_path, 'wb') as f:
-                            f.write(img_response.content)
-                        print(f"[INFO] Seedream生图成功")
-                        return output_path
+    print(f"[WARN] 豆包生图失败: {response.status_code}")
+    return None
 
-            print(f"[WARN] Seedream返回数据异常: {data}")
-            return None
-        else:
-            print(f"[WARN] Seedream请求失败: {response.status_code} - {response.text}")
-            return None
 
-    except Exception as e:
-        print(f"[WARN] Seedream生图异常: {e}")
+def generate_image_dashscope(prompt: str, api_key: str, base_url: str, model: str, output_path: str) -> str:
+    """阿里百炼异步生图"""
+    import requests
+
+    # 提交异步任务
+    url = base_url or "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "X-DashScope-Async": "enable"  # 启用异步调用
+    }
+    payload = {
+        "model": model or "wanx-v1",
+        "input": {"prompt": prompt},
+        "parameters": {
+            "size": "1024*1024",
+            "n": 1
+        }
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=60)
+
+    if response.status_code != 200:
+        print(f"[WARN] 阿里百炼提交任务失败: {response.status_code}")
         return None
+
+    result = response.json()
+    task_id = result.get("output", {}).get("task_id")
+
+    if not task_id:
+        print(f"[WARN] 阿里百炼未返回task_id")
+        return None
+
+    # 轮询查询任务状态
+    query_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+    query_headers = {
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    max_retries = 30  # 最多等待60秒
+    for i in range(max_retries):
+        time.sleep(2)  # 每2秒查询一次
+
+        query_response = requests.get(query_url, headers=query_headers, timeout=30)
+        if query_response.status_code != 200:
+            continue
+
+        query_result = query_response.json()
+        status = query_result.get("output", {}).get("task_status")
+
+        if status == "SUCCEEDED":
+            # 获取图片URL
+            results = query_result.get("output", {}).get("results", [])
+            if results:
+                img_url = results[0].get("url")
+                if img_url:
+                    return download_image(img_url, output_path)
+            return None
+        elif status == "FAILED":
+            error_msg = query_result.get("output", {}).get("message", "未知错误")
+            print(f"[WARN] 阿里百炼任务失败: {error_msg}")
+            return None
+
+    print(f"[WARN] 阿里百炼任务超时")
+    return None
+
+
+def generate_image_openai(prompt: str, api_key: str, base_url: str, model: str, output_path: str) -> str:
+    """OpenAI协议生图"""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    response = client.images.generate(
+        model=model or "dall-e-3",
+        prompt=prompt,
+        size="1024x1024",
+        n=1,
+    )
+
+    if response.data:
+        img_url = response.data[0].url
+        if img_url:
+            return download_image(img_url, output_path)
+
+    return None
+
+
+def generate_image_custom(prompt: str, api_key: str, base_url: str, model: str, output_path: str) -> str:
+    """自定义协议生图（通用OpenAI兼容格式）"""
+    import requests
+
+    url = base_url
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "response_format": "url",
+        "size": "1024x1024",
+        "n": 1
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=120)
+
+    if response.status_code == 200:
+        data = response.json()
+        images = data.get("data", [])
+        if images:
+            img_url = images[0].get("url")
+            if img_url:
+                return download_image(img_url, output_path)
+
+    print(f"[WARN] 自定义协议生图失败: {response.status_code}")
+    return None
+
+
+def download_image(img_url: str, output_path: str) -> str:
+    """下载图片"""
+    import requests
+
+    try:
+        img_response = requests.get(img_url, timeout=60)
+        if img_response.status_code == 200:
+            with open(output_path, 'wb') as f:
+                f.write(img_response.content)
+            return output_path
+    except Exception as e:
+        print(f"[WARN] 图片下载失败: {e}")
+
+    return None
 
 
 def create_placeholder(keyword: str, output_path: str) -> str:
@@ -196,7 +404,6 @@ def create_placeholder(keyword: str, output_path: str) -> str:
         draw.text((x, y), text, fill=(200, 200, 200), font=font)
 
         img.save(output_path, 'JPEG')
-        print(f"[INFO] 创建占位图: {keyword}")
         return output_path
 
     except Exception as e:

@@ -1,5 +1,5 @@
 """
-TTS语音生成服务 (edge-tts)
+TTS语音生成服务 (edge-tts) - 支持静音音频生成
 """
 
 import asyncio
@@ -52,27 +52,70 @@ async def _generate_all_tts(keywords_result: list, voice: str, rate: str, output
             communicate = edge_tts.Communicate(text, voice, rate=rate)
             await communicate.save(audio_path)
 
-            # 获取音频时长
-            duration = get_audio_duration(audio_path)
-
-            result.append({
-                "index": i,
-                "audio_path": audio_path,
-                "duration": duration,
-            })
-
-            print(f"[INFO] TTS生成成功: 片段{i} ({duration:.2f}s)")
+            # 检查文件是否有效
+            if Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
+                # 获取音频时长
+                duration = get_audio_duration(audio_path)
+                result.append({
+                    "index": i,
+                    "audio_path": audio_path,
+                    "duration": duration,
+                })
+                print(f"[INFO] TTS生成成功: 片段{i} ({duration:.2f}s)")
+            else:
+                print(f"[WARN] TTS生成失败: 文件为空")
+                # 创建静音音频
+                silent_path = create_silent_audio(output, i, 3.0)
+                result.append({
+                    "index": i,
+                    "audio_path": silent_path,
+                    "duration": 3.0,
+                })
 
         except Exception as e:
             print(f"[WARN] TTS生成失败: {e}")
             # 创建静音音频
+            silent_path = create_silent_audio(output, i, 3.0)
             result.append({
                 "index": i,
-                "audio_path": None,
+                "audio_path": silent_path,
                 "duration": 3.0,
             })
 
     return result
+
+
+def create_silent_audio(output_dir: Path, index: int, duration: float) -> str:
+    """
+    创建静音音频文件
+
+    Args:
+        output_dir: 输出目录
+        index: 片段索引
+        duration: 时长（秒）
+
+    Returns:
+        静音音频文件路径
+    """
+    try:
+        import numpy as np
+        from moviepy import AudioArrayClip
+
+        # 创建静音音频
+        fps = 44100
+        n_samples = int(duration * fps)
+        silent_array = np.zeros((n_samples, 2))  # 双声道
+
+        audio_clip = AudioArrayClip(silent_array, fps=fps)
+        output_path = str(output_dir / f"{index:03d}_silent.mp3")
+        audio_clip.write_audiofile(output_path, fps=fps, nbytes=2, codec='libmp3lame')
+
+        print(f"[INFO] 创建静音音频: {output_path}")
+        return output_path
+
+    except Exception as e:
+        print(f"[WARN] 创建静音音频失败: {e}")
+        return None
 
 
 def get_audio_duration(audio_path: str) -> float:
