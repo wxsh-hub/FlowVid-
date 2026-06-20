@@ -20,6 +20,18 @@ from app.services.video_maker import make_video
 STORAGE_DIR = Path(__file__).parent.parent.parent.parent / "storage"
 
 
+def _cleanup_task_dir(task_id: str):
+    """清理任务失败后的残留文件"""
+    import shutil
+    task_dir = STORAGE_DIR / task_id
+    if task_dir.exists():
+        try:
+            shutil.rmtree(task_dir)
+            print(f"[INFO] 已清理任务目录: {task_dir}")
+        except Exception as e:
+            print(f"[WARN] 清理任务目录失败: {e}")
+
+
 def update_task_status(task_id: str, step_index: int, step_status: str, progress: int, current_step: str = None):
     """更新任务状态"""
     db = SessionLocal()
@@ -174,3 +186,5 @@ def process_video_task(task_id: str, video_url: str, api_keys: dict, duration: i
     except Exception as e:
         print(f"[ERROR] 任务 {task_id} 处理失败: {e}")
         mark_task_failed(task_id, "处理失败，请查看服务器日志了解详情")
+        # 清理残留文件，避免磁盘膨胀
+        _cleanup_task_dir(task_id)

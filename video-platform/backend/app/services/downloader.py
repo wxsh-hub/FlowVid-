@@ -4,6 +4,7 @@
 
 import re
 import subprocess
+import uuid
 from pathlib import Path
 
 
@@ -132,7 +133,9 @@ def trim_video(video_path: str, duration: int) -> str:
     except ImportError:
         raise Exception("moviepy未安装，请运行: pip install moviepy")
 
-    output_path = video_path.replace(".mp4", "_trimmed.mp4")
+    # 使用UUID避免并发时文件名冲突
+    stem = Path(video_path).stem
+    output_path = str(Path(video_path).parent / f"{stem}_trimmed_{uuid.uuid4().hex[:8]}.mp4")
 
     try:
         print(f"[INFO] 截取视频前 {duration} 秒...")

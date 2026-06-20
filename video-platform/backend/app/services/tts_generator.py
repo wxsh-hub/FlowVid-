@@ -4,6 +4,7 @@ TTS语音生成服务 (edge-tts) - 支持静音音频生成
 
 import asyncio
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 
 def generate_tts(keywords_result: list, voice: str, rate: str, output_dir: str) -> list:
@@ -22,67 +23,61 @@ def generate_tts(keywords_result: list, voice: str, rate: str, output_dir: str) 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    # 使用同步方式运行异步代码
-    loop = asyncio.new_event_loop()
-    result = loop.run_until_complete(
-        _generate_all_tts(keywords_result, voice, rate, str(output))
-    )
-    loop.close()
+    # 使用同步方式运行异步代码（在独立线程中运行避免事件循环冲突）
+    def _run_async():
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                _generate_all_tts(keywords_result, voice, rate, str(output))
+            )
+        finally:
+            loop.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(_run_async).result()
 
     print(f"[INFO] TTS生成完成: {len(result)} 个音频")
     return result
 
 
 async def _generate_all_tts(keywords_result: list, voice: str, rate: str, output_dir: str) -> list:
-    """异步生成所有TTS音频"""
+    """异步并发生成所有TTS音频"""
     import edge_tts
 
-    result = []
     output = Path(output_dir)
+    semaphore = asyncio.Semaphore(4)  # 限制并发数
 
+    async def _generate_one(idx: int, text: str) -> dict:
+        """生成单个TTS音频"""
+        async with semaphore:
+            audio_path = str(output / f"{idx:03d}.mp3")
+            try:
+                communicate = edge_tts.Communicate(text, voice, rate=rate)
+                await communicate.save(audio_path)
+
+                if Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
+                    duration = get_audio_duration(audio_path)
+                    print(f"[INFO] TTS生成成功: 片段{idx} ({duration:.2f}s)")
+                    return {"index": idx, "audio_path": audio_path, "duration": duration}
+                else:
+                    print(f"[WARN] TTS生成失败: 片段{idx} 文件为空")
+                    silent_path = create_silent_audio(output, idx, 3.0)
+                    return {"index": idx, "audio_path": silent_path, "duration": 3.0}
+            except Exception as e:
+                print(f"[WARN] TTS生成失败: 片段{idx}: {e}")
+                silent_path = create_silent_audio(output, idx, 3.0)
+                return {"index": idx, "audio_path": silent_path, "duration": 3.0}
+
+    # 收集需要生成的片段并并发执行
+    tasks = []
     for i, item in enumerate(keywords_result):
         text = item.get("text", "")
         if not text:
             continue
+        tasks.append(_generate_one(i, text))
 
-        audio_path = str(output / f"{i:03d}.mp3")
-
-        try:
-            # 生成TTS
-            communicate = edge_tts.Communicate(text, voice, rate=rate)
-            await communicate.save(audio_path)
-
-            # 检查文件是否有效
-            if Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
-                # 获取音频时长
-                duration = get_audio_duration(audio_path)
-                result.append({
-                    "index": i,
-                    "audio_path": audio_path,
-                    "duration": duration,
-                })
-                print(f"[INFO] TTS生成成功: 片段{i} ({duration:.2f}s)")
-            else:
-                print(f"[WARN] TTS生成失败: 文件为空")
-                # 创建静音音频
-                silent_path = create_silent_audio(output, i, 3.0)
-                result.append({
-                    "index": i,
-                    "audio_path": silent_path,
-                    "duration": 3.0,
-                })
-
-        except Exception as e:
-            print(f"[WARN] TTS生成失败: {e}")
-            # 创建静音音频
-            silent_path = create_silent_audio(output, i, 3.0)
-            result.append({
-                "index": i,
-                "audio_path": silent_path,
-                "duration": 3.0,
-            })
-
-    return result
+    results = await asyncio.gather(*tasks)
+    return list(results)
 
 
 def create_silent_audio(output_dir: Path, index: int, duration: float) -> str:

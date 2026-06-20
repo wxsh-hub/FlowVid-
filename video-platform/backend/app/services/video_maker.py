@@ -37,100 +37,119 @@ def make_video(images_result: list, tts_result: list, keywords_result: list, out
 
     # 创建视频片段
     clips = []
+    created_clips = []  # 跟踪所有创建的clip，用于异常时清理
 
     # 对齐三个列表长度：以最短的为准，避免IndexError
     min_len = min(len(images_result), len(tts_result), len(keywords_result))
     if min_len < max(len(images_result), len(tts_result), len(keywords_result)):
         print(f"[WARN] 列表长度不一致: images={len(images_result)}, tts={len(tts_result)}, keywords={len(keywords_result)}，截取到 {min_len}")
 
-    for i in range(min_len):
-        img_item = images_result[i]
-        tts_item = tts_result[i]
-        img_path = img_item.get("image_path")
-        audio_path = tts_item.get("audio_path")
-        duration = tts_item.get("duration", 3.0)
-        text = keywords_result[i].get("text", "")
+    try:
+        for i in range(min_len):
+            img_item = images_result[i]
+            tts_item = tts_result[i]
+            img_path = img_item.get("image_path")
+            audio_path = tts_item.get("audio_path")
+            duration = tts_item.get("duration", 3.0)
+            text = keywords_result[i].get("text", "")
 
-        if not img_path or not Path(img_path).exists():
-            print(f"[WARN] 图片不存在，跳过片段{i}: {img_path}")
-            continue
+            # 安全检查：跳过无效图片路径（包括None）
+            if not img_path or not isinstance(img_path, str) or not Path(img_path).exists():
+                print(f"[WARN] 图片不存在，跳过片段{i}: {img_path}")
+                continue
 
-        # 检查音频文件是否有效
-        has_audio = False
-        if audio_path and Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
-            has_audio = True
+            # 检查音频文件是否有效
+            has_audio = False
+            if audio_path and Path(audio_path).exists() and Path(audio_path).stat().st_size > 0:
+                has_audio = True
 
-        # 创建图片片段
-        img_clip = ImageClip(img_path).with_duration(duration)
+            # 创建图片片段
+            img_clip = ImageClip(img_path).with_duration(duration)
+            created_clips.append(img_clip)
 
-        # 调整图片尺寸为1920x1080
-        img_clip = img_clip.resized((1920, 1080))
+            # 调整图片尺寸为1920x1080
+            img_clip = img_clip.resized((1920, 1080))
 
-        # 添加音频
-        if has_audio:
+            # 添加音频
+            if has_audio:
+                try:
+                    audio_clip = AudioFileClip(audio_path)
+                    created_clips.append(audio_clip)
+                    img_clip = img_clip.with_audio(audio_clip)
+                except Exception as e:
+                    print(f"[WARN] 音频加载失败: {e}")
+
+            # 添加字幕（使用Pillow渲染中文）
+            if text and font_path:
+                try:
+                    subtitle_img_path = render_subtitle_image(text, font_path, i)
+                    if subtitle_img_path:
+                        subtitle_clip = ImageClip(subtitle_img_path).with_duration(duration)
+                        created_clips.append(subtitle_clip)
+                        subtitle_clip = subtitle_clip.with_position(('center', 850))
+                        img_clip = CompositeVideoClip([img_clip, subtitle_clip])
+                        created_clips.append(img_clip)
+                except Exception as e:
+                    print(f"[WARN] 字幕渲染失败: {e}")
+
+            clips.append(img_clip)
+            print(f"[INFO] 片段{i}: 图片={Path(img_path).name}, 音频={'有' if has_audio else '无'}, 字幕={'有' if text else '无'}")
+
+        if not clips:
+            raise Exception("没有有效的视频片段")
+
+        # 合并所有片段
+        final_video = concatenate_videoclips(clips, method="compose")
+
+        # 导出视频
+        final_video.write_videofile(
+            str(output),
+            fps=30,
+            codec='libx264',
+            audio_codec='aac',
+            threads=4,
+            preset='medium',
+        )
+
+        final_video.close()
+        print(f"[INFO] 视频合成完成: {output_path}")
+        return str(output)
+
+    finally:
+        # 无论成功失败，都关闭所有已创建的clip，避免文件句柄泄漏
+        for clip in created_clips:
             try:
-                audio_clip = AudioFileClip(audio_path)
-                img_clip = img_clip.with_audio(audio_clip)
-            except Exception as e:
-                print(f"[WARN] 音频加载失败: {e}")
-
-        # 添加字幕（使用Pillow渲染中文）
-        if text and font_path:
-            try:
-                # 使用Pillow渲染字幕图片
-                subtitle_img_path = render_subtitle_image(text, font_path, i)
-                if subtitle_img_path:
-                    subtitle_clip = ImageClip(subtitle_img_path).with_duration(duration)
-                    subtitle_clip = subtitle_clip.with_position(('center', 850))
-                    img_clip = CompositeVideoClip([img_clip, subtitle_clip])
-            except Exception as e:
-                print(f"[WARN] 字幕渲染失败: {e}")
-
-        clips.append(img_clip)
-        print(f"[INFO] 片段{i}: 图片={Path(img_path).name}, 音频={'有' if has_audio else '无'}, 字幕={'有' if text else '无'}")
-
-    if not clips:
-        raise Exception("没有有效的视频片段")
-
-    # 合并所有片段
-    final_video = concatenate_videoclips(clips, method="compose")
-
-    # 导出视频
-    final_video.write_videofile(
-        str(output),
-        fps=30,
-        codec='libx264',
-        audio_codec='aac',
-        threads=4,
-        preset='medium',
-    )
-
-    # 清理
-    final_video.close()
-    for clip in clips:
-        clip.close()
-
-    print(f"[INFO] 视频合成完成: {output_path}")
-    return str(output)
+                clip.close()
+            except Exception:
+                pass
 
 
 def find_chinese_font():
-    """查找中文字体"""
+    """查找中文字体（跨平台兼容）"""
     import os
 
-    # Windows字体路径
+    # 跨平台字体路径
     font_paths = [
-        "C:/Windows/Fonts/msyh.ttc",      # 微软雅黑
-        "C:/Windows/Fonts/simhei.ttf",     # 黑体
-        "C:/Windows/Fonts/simsun.ttc",     # 宋体
-        "C:/Windows/Fonts/msyhbd.ttc",     # 微软雅黑粗体
+        # Windows
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/simsun.ttc",
+        "C:/Windows/Fonts/msyhbd.ttc",
+        # macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        # Linux
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
     ]
 
     for path in font_paths:
         if os.path.exists(path):
             return path
 
-    # 如果找不到，返回None
     print("[WARN] 未找到中文字体，字幕可能无法正常显示")
     return None
 

@@ -77,7 +77,7 @@ def fetch_images(keywords_result: list, api_key: str, base_url: str, model: str,
                 print(f"[WARN] 图片 {task['index']+1} 获取失败: {e}")
                 result[task["index"]] = {
                     "index": task["index"],
-                    "image_path": create_placeholder(task["keyword"], task["output_path"]),
+                    "image_path": safe_create_placeholder(task["keyword"], task["output_path"]),
                     "keyword": task["keyword"],
                 }
 
@@ -86,7 +86,7 @@ def fetch_images(keywords_result: list, api_key: str, base_url: str, model: str,
         if result[i] is None:
             result[i] = {
                 "index": i,
-                "image_path": create_placeholder(tasks[i]["keyword"], tasks[i]["output_path"]),
+                "image_path": safe_create_placeholder(tasks[i]["keyword"], tasks[i]["output_path"]),
                 "keyword": tasks[i]["keyword"],
             }
 
@@ -389,9 +389,23 @@ def create_placeholder(keyword: str, output_path: str) -> str:
         draw = ImageDraw.Draw(img)
 
         # 添加文字
-        try:
-            font = ImageFont.truetype("msyh.ttc", 60)
-        except:
+        # 尝试多个字体路径（跨平台兼容）
+        font = None
+        font_candidates = [
+            "msyh.ttc",           # Windows 微软雅黑
+            "msyhbd.ttc",         # Windows 微软雅黑粗体
+            "SimHei.ttf",         # Windows 黑体
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",  # Linux 文泉驿
+            "/System/Library/Fonts/PingFang.ttc",             # macOS 苹方
+            "/System/Library/Fonts/STHeiti Medium.ttc",       # macOS 黑体
+        ]
+        for font_path in font_candidates:
+            try:
+                font = ImageFont.truetype(font_path, 60)
+                break
+            except (OSError, IOError):
+                continue
+        if font is None:
             font = ImageFont.load_default()
 
         # 绘制文字
@@ -409,3 +423,12 @@ def create_placeholder(keyword: str, output_path: str) -> str:
     except Exception as e:
         print(f"[WARN] 创建占位图失败: {e}")
         return None
+
+
+def safe_create_placeholder(keyword: str, output_path: str) -> str:
+    """安全创建占位图，保证不返回None"""
+    result = create_placeholder(keyword, output_path)
+    if result is not None:
+        return result
+    # 最终兜底：返回output_path（即使文件未创建，调用方会检查文件是否存在）
+    return output_path
